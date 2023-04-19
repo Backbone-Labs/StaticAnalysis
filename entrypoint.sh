@@ -35,11 +35,11 @@ apt-get update && apt-get install -y python3 python3-venv cmake ninja-build ccac
 # Install ESP-IDF
 echo "Installing ESP-IDF"
 mkdir -p esp
-git clone -b ${INPUT_ESP_IDF_VERSION} --depth=1 --recursive https://github.com/espressif/esp-idf.git ${GITHUB_WORKSPACE}/esp/esp-idf
+git clone -b ${INPUT_ESP_IDF_VERSION} --depth=1 --recursive https://github.com/espressif/esp-idf.git ~/esp/esp-idf
 echo "Installing ESP-IDF tools"
-${GITHUB_WORKSPACE}/esp/esp-idf/install.sh esp32
+~/esp/esp-idf/install.sh esp32
 echo "Setting up ESP-IDF"
-. ${GITHUB_WORKSPACE}/esp/esp-idf/export.sh
+. ~/esp/esp-idf/export.sh
 
 if [ -n "$INPUT_APT_PCKGS" ]; then
     apt-get update && eval apt-get install -y "$INPUT_APT_PCKGS"
