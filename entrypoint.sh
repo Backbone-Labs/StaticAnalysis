@@ -32,15 +32,6 @@ fi
 
 apt-get update && apt-get install -y python3 python3-venv cmake ninja-build ccache libffi-dev libssl-dev dfu-util libusb-1.0-0
 
-# Install ESP-IDF
-echo "Installing ESP-IDF"
-mkdir -p esp
-git clone -b ${INPUT_ESP_IDF_VERSION} --depth=1 --recursive https://github.com/espressif/esp-idf.git ~/esp/esp-idf
-echo "Installing ESP-IDF tools"
-~/esp/esp-idf/install.sh esp32
-echo "Setting up ESP-IDF"
-. ~/esp/esp-idf/export.sh
-
 if [ -n "$INPUT_APT_PCKGS" ]; then
     apt-get update && eval apt-get install -y "$INPUT_APT_PCKGS"
 fi
@@ -79,8 +70,21 @@ fi
 cd build
 
 if [ "$INPUT_USE_CMAKE" = true ]; then
-    cmake -DCMAKE_EXPORT_COMPILE_COMMANDS=ON "$INPUT_CMAKE_ARGS" .. -G Ninja
-    ninja
+
+    # Install ESP-IDF
+    (
+        # inside parentheses to avoid setting variables in the current shell
+        echo "Installing ESP-IDF"
+        mkdir -p ~/esp
+        git clone -b ${INPUT_ESP_IDF_VERSION} --depth=1 --recursive https://github.com/espressif/esp-idf.git ~/esp/esp-idf
+        echo "Installing ESP-IDF tools"
+        ~/esp/esp-idf/install.sh esp32
+        echo "Setting up ESP-IDF"
+        . ~/esp/esp-idf/export.sh
+        echo "Building project"
+        cmake -DCMAKE_EXPORT_COMPILE_COMMANDS=ON "$INPUT_CMAKE_ARGS" .. -G Ninja
+        ninja
+    )
 fi
 
 if [ -z "$INPUT_EXCLUDE_DIR" ]; then
