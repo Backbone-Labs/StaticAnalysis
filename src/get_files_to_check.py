@@ -16,7 +16,7 @@ def get_files_to_check(directory_in, excludes_in):
         str: A space-separated string of file paths that meet the search criteria.
     """
 
-    exclude_prefixes = [f"{directory_in}/build"]
+    exclude_prefixes = [f"{directory_in}/build", "/github/home/esp"]
 
     if excludes_in is not None:
         excludes_list = excludes_in.split(" ")
