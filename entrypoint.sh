@@ -79,7 +79,8 @@ fi
 cd build
 
 if [ "$INPUT_USE_CMAKE" = true ]; then
-    cmake -DCMAKE_EXPORT_COMPILE_COMMANDS=ON "$INPUT_CMAKE_ARGS" ..
+    cmake -DCMAKE_EXPORT_COMPILE_COMMANDS=ON "$INPUT_CMAKE_ARGS" .. -G Ninja
+    ninja
 fi
 
 if [ -z "$INPUT_EXCLUDE_DIR" ]; then
