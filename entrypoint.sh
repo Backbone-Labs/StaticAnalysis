@@ -19,6 +19,7 @@ print_to_console=${INPUT_FORCE_CONSOLE_PRINT}
 # Some debug info
 debug_print "Using CMake = $INPUT_USE_CMAKE"
 debug_print "Print to console = $print_to_console"
+debug_print "Using ESP-IDF Version = $INPUT_ESP_IDF_VERSION"
 
 if [ "$print_to_console" = true ]; then
     echo "The 'force_console_print' option is enabled. Printing output to console."
@@ -28,6 +29,17 @@ elif [ -z "$INPUT_PR_NUM" ]; then
 else
     debug_print "Pull request number: ${INPUT_PR_NUM}"
 fi
+
+apt-get update && apt-get install -y python3 python3-venv cmake ninja-build ccache libffi-dev libssl-dev dfu-util libusb-1.0-0
+
+# Install ESP-IDF
+echo "Installing ESP-IDF"
+mkdir -p esp
+git clone -b ${INPUT_ESP_IDF_VERSION} --depth=1 --recursive https://github.com/espressif/esp-idf.git \${root_dir}/esp/esp-idf
+echo "Installing ESP-IDF tools"
+\${root_dir}/esp/esp-idf/install.sh esp32
+echo "Setting up ESP-IDF"
+. \${root_dir}/esp/esp-idf/export.sh
 
 if [ -n "$INPUT_APT_PCKGS" ]; then
     apt-get update && eval apt-get install -y "$INPUT_APT_PCKGS"
