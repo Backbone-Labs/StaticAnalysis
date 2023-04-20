@@ -67,6 +67,9 @@ fi
 
 cd build
 
+# NOTE: if you use cmake, then you'll end up also checking a lot of esp-idf
+#       code. I have not figured out how to generate the compile_commands.json
+#       and not also analyze the esp-idf files.
 if [ "$INPUT_USE_CMAKE" = true ]; then
     apt-get update && apt-get install -y python3 python3-venv cmake ninja-build ccache libffi-dev libssl-dev dfu-util libusb-1.0-0
     (
@@ -110,9 +113,11 @@ else
     eval cppcheck "$files_to_check" "$INPUT_CPPCHECK_ARGS" --output-file=cppcheck.txt || true
 fi
 
+# NOTE: clang-tidy cannot handle the esp-idf code (or I haven't figured out how
+#       to configure it for it...), so we're disabling it for now
+echo "" > clang_tidy.txt
 # Excludes for clang-tidy are handled in python script
 # debug_print "Running clang-tidy-15 $INPUT_CLANG_TIDY_ARGS -p $(pwd) $files_to_check >>clang_tidy.txt 2>&1"
 # eval clang-tidy-15 "$INPUT_CLANG_TIDY_ARGS" -p "$(pwd)" "$files_to_check" >clang_tidy.txt 2>&1 || true
-echo "" > clang_tidy.txt
 
 python3 /run_static_analysis.py -cc cppcheck.txt -ct clang_tidy.txt -o "$print_to_console" -fk "$use_extra_directory"
