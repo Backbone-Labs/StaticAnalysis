@@ -30,8 +30,6 @@ else
     debug_print "Pull request number: ${INPUT_PR_NUM}"
 fi
 
-apt-get update && apt-get install -y python3 python3-venv cmake ninja-build ccache libffi-dev libssl-dev dfu-util libusb-1.0-0
-
 if [ -n "$INPUT_APT_PCKGS" ]; then
     apt-get update && eval apt-get install -y "$INPUT_APT_PCKGS"
 fi
@@ -70,6 +68,7 @@ fi
 cd build
 
 if [ "$INPUT_USE_CMAKE" = true ]; then
+    apt-get update && apt-get install -y python3 python3-venv cmake ninja-build ccache libffi-dev libssl-dev dfu-util libusb-1.0-0
     (
         # inside parentheses to avoid setting variables in the current shell
         echo "Installing ESP-IDF"
