@@ -54,6 +54,28 @@ if [ "$GITHUB_EVENT_NAME" = "pull_request_target" ] && [ -n "$INPUT_PR_REPO" ]; 
     export GITHUB_WORKSPACE=$(pwd)
 fi
 
+preselected_files=""
+common_ancestor=""
+if [ "$INPUT_REPORT_PR_CHANGES_ONLY" = true ]; then
+    echo "The 'report_pr_changes_only' option is enabled. Running SA only on modified files."
+    git config --global --add safe.directory /github/workspace
+    git fetch origin
+    common_ancestor=$(git merge-base origin/"$GITHUB_BASE_REF" "origin/$GITHUB_HEAD_REF")
+    debug_print "Common ancestor: $common_ancestor"
+    preselected_files="$(git diff --name-only "$common_ancestor" "origin/$GITHUB_HEAD_REF" | grep -E '\.(c|cpp|h|hpp)$')" || true
+    if [ -z "$preselected_files" ]; then
+        debug_print "No (C/C++ files changed in the PR! Only files ending with c|cpp|h|hpp are considered."
+
+        # Create empty files
+        touch cppcheck.txt
+        touch clang_tidy.txt
+        python3 /run_static_analysis.py -cc ./cppcheck.txt -ct ./clang_tidy.txt -o "$print_to_console" -fk "$use_extra_directory" --common "$common_ancestor" --head "origin/$GITHUB_HEAD_REF"
+        exit 0
+    else
+        debug_print "Preselected files: \n$preselected_files"
+    fi
+fi
+
 debug_print "GITHUB_WORKSPACE = ${GITHUB_WORKSPACE} INPUT_EXCLUDE_DIR = ${INPUT_EXCLUDE_DIR} use_extra_directory = ${use_extra_directory}"
 
 mkdir -p build
@@ -88,36 +110,56 @@ if [ "$INPUT_USE_CMAKE" = true ]; then
 fi
 
 if [ -z "$INPUT_EXCLUDE_DIR" ]; then
-    files_to_check=$(python3 /get_files_to_check.py -dir="$GITHUB_WORKSPACE")
-    debug_print "Running: files_to_check=python3 /get_files_to_check.py -dir=\"$GITHUB_WORKSPACE\")"
+    files_to_check=$(python3 /get_files_to_check.py -dir="$GITHUB_WORKSPACE" -preselected="$preselected_files")
+    debug_print "Running: files_to_check=python3 /get_files_to_check.py -dir=\"$GITHUB_WORKSPACE\" -preselected=\"$preselected_files\")"
 else
-    files_to_check=$(python3 /get_files_to_check.py -exclude="$GITHUB_WORKSPACE/$INPUT_EXCLUDE_DIR" -dir="$GITHUB_WORKSPACE")
-    debug_print "Running: files_to_check=python3 /get_files_to_check.py -exclude=\"$GITHUB_WORKSPACE/$INPUT_EXCLUDE_DIR\" -dir=\"$GITHUB_WORKSPACE\")"
+    files_to_check=$(python3 /get_files_to_check.py -exclude="$GITHUB_WORKSPACE/$INPUT_EXCLUDE_DIR" -dir="$GITHUB_WORKSPACE" -preselected="$preselected_files")
+    debug_print "Running: files_to_check=python3 /get_files_to_check.py -exclude=\"$GITHUB_WORKSPACE/$INPUT_EXCLUDE_DIR\" -dir=\"$GITHUB_WORKSPACE\" -preselected=\"$preselected_files\")"
 fi
 
 debug_print "Files to check = $files_to_check"
 debug_print "INPUT_CPPCHECK_ARGS = $INPUT_CPPCHECK_ARGS"
 debug_print "INPUT_CLANG_TIDY_ARGS = $INPUT_CLANG_TIDY_ARGS"
 
-if [ "$INPUT_USE_CMAKE" = true ]; then
-    if [ -z "$INPUT_EXCLUDE_DIR" ]; then
-        debug_print "Running cppcheck --project=compile_commands.json $INPUT_CPPCHECK_ARGS --output-file=cppcheck.txt ..."
-        eval cppcheck --project=compile_commands.json "$INPUT_CPPCHECK_ARGS" --output-file=cppcheck.txt "$GITHUB_WORKSPACE" || true
-    else
-        debug_print "Running cppcheck --project=compile_commands.json $INPUT_CPPCHECK_ARGS --output-file=cppcheck.txt -i$GITHUB_WORKSPACE/$INPUT_EXCLUDE_DIR ..."
-        eval cppcheck --project=compile_commands.json "$INPUT_CPPCHECK_ARGS" --output-file=cppcheck.txt -i"$GITHUB_WORKSPACE/$INPUT_EXCLUDE_DIR" "$GITHUB_WORKSPACE" || true
-    fi
+if [ -z "$files_to_check" ]; then
+    echo "No files to check"
 else
-    # Excludes for clang-tidy are handled in python script
-    debug_print "Running cppcheck $files_to_check $INPUT_CPPCHECK_ARGS --output-file=cppcheck.txt ..."
-    eval cppcheck "$files_to_check" "$INPUT_CPPCHECK_ARGS" --output-file=cppcheck.txt || true
-fi
+    if [ "$INPUT_USE_CMAKE" = true ]; then
+        if [ "$INPUT_REPORT_PR_CHANGES_ONLY" = true ]; then
+            preselected_altered="${files_to_check// /|}"
+            apt-get install -y jq
+            jq '[.[] | select(.file | test("'"$preselected_altered"'"))]' compile_commands.json > compile_commands_selected.json
+            mv compile_commands_selected.json compile_commands.json
+        fi
+        if [ -z "$INPUT_EXCLUDE_DIR" ]; then
+            debug_print "Running cppcheck --project=compile_commands.json $INPUT_CPPCHECK_ARGS --output-file=cppcheck.txt ..."
+            eval cppcheck --project=compile_commands.json "$INPUT_CPPCHECK_ARGS" --output-file=cppcheck.txt "$GITHUB_WORKSPACE" || true
+        else
+            debug_print "Running cppcheck --project=compile_commands.json $INPUT_CPPCHECK_ARGS --output-file=cppcheck.txt -i$GITHUB_WORKSPACE/$INPUT_EXCLUDE_DIR ..."
+            eval cppcheck --project=compile_commands.json "$INPUT_CPPCHECK_ARGS" --output-file=cppcheck.txt -i"$GITHUB_WORKSPACE/$INPUT_EXCLUDE_DIR" "$GITHUB_WORKSPACE" || true
+        fi
+
+        # Excludes for clang-tidy are handled in python script
+        debug_print "Running run-clang-tidy-16 $INPUT_CLANG_TIDY_ARGS -p $(pwd) $files_to_check >>clang_tidy.txt 2>&1"
+        eval run-clang-tidy-16 "$INPUT_CLANG_TIDY_ARGS" -p "$(pwd)" "$files_to_check" >clang_tidy.txt 2>&1 || true
+
+    else
+        # Excludes for clang-tidy are handled in python script
+        debug_print "Running cppcheck $files_to_check $INPUT_CPPCHECK_ARGS --output-file=cppcheck.txt ..."
+        eval cppcheck "$files_to_check" "$INPUT_CPPCHECK_ARGS" --output-file=cppcheck.txt || true
+
+        debug_print "Running run-clang-tidy-16 $INPUT_CLANG_TIDY_ARGS $files_to_check >>clang_tidy.txt 2>&1"
+        eval run-clang-tidy-16 "$INPUT_CLANG_TIDY_ARGS" "$files_to_check" >clang_tidy.txt 2>&1 || true
+    fi
 
 # NOTE: clang-tidy cannot handle the esp-idf code (or I haven't figured out how
 #       to configure it for it...), so we're disabling it for now
-echo "" > clang_tidy.txt
+# echo "" > clang_tidy.txt
 # Excludes for clang-tidy are handled in python script
 # debug_print "Running clang-tidy-15 $INPUT_CLANG_TIDY_ARGS -p $(pwd) $files_to_check >>clang_tidy.txt 2>&1"
 # eval clang-tidy-15 "$INPUT_CLANG_TIDY_ARGS" -p "$(pwd)" "$files_to_check" >clang_tidy.txt 2>&1 || true
 
-python3 /run_static_analysis.py -cc cppcheck.txt -ct clang_tidy.txt -o "$print_to_console" -fk "$use_extra_directory"
+    cd -
+
+    python3 /run_static_analysis.py -cc ./build/cppcheck.txt -ct ./build/clang_tidy.txt -o "$print_to_console" -fk "$use_extra_directory" --common "$common_ancestor" --head "origin/$GITHUB_HEAD_REF"
+fi
