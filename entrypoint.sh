@@ -19,6 +19,7 @@ print_to_console=${INPUT_FORCE_CONSOLE_PRINT}
 # Some debug info
 debug_print "Using CMake = $INPUT_USE_CMAKE"
 debug_print "Print to console = $print_to_console"
+debug_print "Using ESP-IDF Version = $INPUT_ESP_IDF_VERSION"
 
 if [ "$print_to_console" = true ]; then
     echo "The 'force_console_print' option is enabled. Printing output to console."
@@ -88,11 +89,24 @@ fi
 
 cd build
 
+# NOTE: if you use cmake, then you'll end up also checking a lot of esp-idf
+#       code. I have not figured out how to generate the compile_commands.json
+#       and not also analyze the esp-idf files.
 if [ "$INPUT_USE_CMAKE" = true ]; then
-    # Trim trailing newlines
-    INPUT_CMAKE_ARGS="${INPUT_CMAKE_ARGS%"${INPUT_CMAKE_ARGS##*[![:space:]]}"}"
-    debug_print "Running cmake -DCMAKE_EXPORT_COMPILE_COMMANDS=ON $INPUT_CMAKE_ARGS -S $GITHUB_WORKSPACE -B $(pwd)"
-    eval "cmake -DCMAKE_EXPORT_COMPILE_COMMANDS=ON $INPUT_CMAKE_ARGS -S $GITHUB_WORKSPACE -B $(pwd)"
+    apt-get update && apt-get install -y python3 python3-venv cmake ninja-build ccache libffi-dev libssl-dev dfu-util libusb-1.0-0
+    (
+        # inside parentheses to avoid setting variables in the current shell
+        echo "Installing ESP-IDF"
+        mkdir -p ~/esp
+        git clone -b ${INPUT_ESP_IDF_VERSION} --depth=1 --recursive https://github.com/espressif/esp-idf.git ~/esp/esp-idf
+        echo "Installing ESP-IDF tools"
+        ~/esp/esp-idf/install.sh esp32
+        echo "Setting up ESP-IDF"
+        . ~/esp/esp-idf/export.sh
+        echo "Building project"
+        cmake -DCMAKE_EXPORT_COMPILE_COMMANDS=ON "$INPUT_CMAKE_ARGS" .. -G Ninja
+        ninja
+    )
 fi
 
 if [ -z "$INPUT_EXCLUDE_DIR" ]; then
@@ -137,6 +151,13 @@ else
         debug_print "Running run-clang-tidy-16 $INPUT_CLANG_TIDY_ARGS $files_to_check >>clang_tidy.txt 2>&1"
         eval run-clang-tidy-16 "$INPUT_CLANG_TIDY_ARGS" "$files_to_check" >clang_tidy.txt 2>&1 || true
     fi
+
+# NOTE: clang-tidy cannot handle the esp-idf code (or I haven't figured out how
+#       to configure it for it...), so we're disabling it for now
+# echo "" > clang_tidy.txt
+# Excludes for clang-tidy are handled in python script
+# debug_print "Running clang-tidy-15 $INPUT_CLANG_TIDY_ARGS -p $(pwd) $files_to_check >>clang_tidy.txt 2>&1"
+# eval clang-tidy-15 "$INPUT_CLANG_TIDY_ARGS" -p "$(pwd)" "$files_to_check" >clang_tidy.txt 2>&1 || true
 
     cd -
 
