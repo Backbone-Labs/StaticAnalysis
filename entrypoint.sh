@@ -1,5 +1,5 @@
 #!/bin/bash
-# shellcheck disable=SC2155
+# shellcheck disable=SC1091
 
 set -e
 
@@ -7,17 +7,15 @@ export TERM=xterm-color
 
 debug_print() {
     if [ "$INPUT_VERBOSE" = "true" ]; then
-        IFS=$'\n' read -ra ADDR <<< "$1"
-        for i in "${ADDR[@]}"; do
-            echo -e "\u001b[32m $i \u001b[0m"
-        done
+        echo -e "\u001b[32m $1 \u001b[0m"
     fi
 }
 
 print_to_console=${INPUT_FORCE_CONSOLE_PRINT}
+check_cpp=$( [ "${INPUT_LANGUAGE,,}" = "c++" ] && echo "true" || echo "false" )
+check_python=$( [ "${INPUT_LANGUAGE,,}" = "python" ] && echo "true" || echo "false" )
 
 # Some debug info
-debug_print "Using CMake = $INPUT_USE_CMAKE"
 debug_print "Print to console = $print_to_console"
 debug_print "Using ESP-IDF Version = $INPUT_ESP_IDF_VERSION"
 
@@ -51,7 +49,8 @@ if [ "$GITHUB_EVENT_NAME" = "pull_request_target" ] && [ -n "$INPUT_PR_REPO" ]; 
     NEW_GITHUB_SHA=$(git rev-parse HEAD)
 
     export GITHUB_SHA=$NEW_GITHUB_SHA
-    export GITHUB_WORKSPACE=$(pwd)
+    pwd=$(pwd)
+    export GITHUB_WORKSPACE=$pwd
 fi
 
 preselected_files=""
@@ -62,15 +61,18 @@ if [ "$INPUT_REPORT_PR_CHANGES_ONLY" = true ]; then
     git fetch origin
     common_ancestor=$(git merge-base origin/"$GITHUB_BASE_REF" "origin/$GITHUB_HEAD_REF")
     debug_print "Common ancestor: $common_ancestor"
-    preselected_files="$(git diff --name-only "$common_ancestor" "origin/$GITHUB_HEAD_REF" | grep -E '\.(c|cpp|h|hpp)$')" || true
-    if [ -z "$preselected_files" ]; then
-        debug_print "No (C/C++ files changed in the PR! Only files ending with c|cpp|h|hpp are considered."
+    if [ "$check_cpp" = "true" ]; then
+        preselected_files="$(git diff --name-only "$common_ancestor" "origin/$GITHUB_HEAD_REF" | grep -E '\.(c|cpp|h|hpp)$')" || true
+        output_string="No (C/C++) files changed in the PR! Only files ending with .c, .cpp, .h, or .hpp are considered."
+    fi
 
-        # Create empty files
-        touch cppcheck.txt
-        touch clang_tidy.txt
-        python3 /run_static_analysis.py -cc ./cppcheck.txt -ct ./clang_tidy.txt -o "$print_to_console" -fk "$use_extra_directory" --common "$common_ancestor" --head "origin/$GITHUB_HEAD_REF"
-        exit 0
+    if [ "$check_python" = "true" ]; then
+        preselected_files="$(git diff --name-only "$common_ancestor" "origin/$GITHUB_HEAD_REF" | grep -E '\.(py)$')" || true
+        output_string="No Python files changed in the PR! Only files ending with .py are considered."
+    fi
+
+    if [ -z "$preselected_files" ]; then
+        debug_print "$output_string"
     else
         debug_print "Preselected files: \n$preselected_files"
     fi
@@ -87,79 +89,10 @@ if [ -n "$INPUT_INIT_SCRIPT" ]; then
     source "$original_root_dir/$INPUT_INIT_SCRIPT" "$GITHUB_WORKSPACE" "$GITHUB_WORKSPACE/build"
 fi
 
-cd build
-
-# NOTE: if you use cmake, then you'll end up also checking a lot of esp-idf
-#       code. I have not figured out how to generate the compile_commands.json
-#       and not also analyze the esp-idf files.
-if [ "$INPUT_USE_CMAKE" = true ]; then
-    apt-get update && apt-get install -y python3 python3-venv cmake ninja-build ccache libffi-dev libssl-dev dfu-util libusb-1.0-0
-    (
-        # inside parentheses to avoid setting variables in the current shell
-        echo "Installing ESP-IDF"
-        mkdir -p ~/esp
-        git clone -b ${INPUT_ESP_IDF_VERSION} --depth=1 --recursive https://github.com/espressif/esp-idf.git ~/esp/esp-idf
-        echo "Installing ESP-IDF tools"
-        ~/esp/esp-idf/install.sh esp32
-        echo "Setting up ESP-IDF"
-        . ~/esp/esp-idf/export.sh
-        echo "Building project"
-        cmake -DCMAKE_EXPORT_COMPILE_COMMANDS=ON "$INPUT_CMAKE_ARGS" .. -G Ninja
-        ninja
-    )
-fi
-
-if [ -z "$INPUT_EXCLUDE_DIR" ]; then
-    files_to_check=$(python3 /get_files_to_check.py -dir="$GITHUB_WORKSPACE" -preselected="$preselected_files")
-    debug_print "Running: files_to_check=python3 /get_files_to_check.py -dir=\"$GITHUB_WORKSPACE\" -preselected=\"$preselected_files\")"
-else
-    files_to_check=$(python3 /get_files_to_check.py -exclude="$GITHUB_WORKSPACE/$INPUT_EXCLUDE_DIR" -dir="$GITHUB_WORKSPACE" -preselected="$preselected_files")
-    debug_print "Running: files_to_check=python3 /get_files_to_check.py -exclude=\"$GITHUB_WORKSPACE/$INPUT_EXCLUDE_DIR\" -dir=\"$GITHUB_WORKSPACE\" -preselected=\"$preselected_files\")"
-fi
-
-debug_print "Files to check = $files_to_check"
-debug_print "INPUT_CPPCHECK_ARGS = $INPUT_CPPCHECK_ARGS"
-debug_print "INPUT_CLANG_TIDY_ARGS = $INPUT_CLANG_TIDY_ARGS"
-
-if [ -z "$files_to_check" ]; then
-    echo "No files to check"
-else
-    if [ "$INPUT_USE_CMAKE" = true ]; then
-        if [ "$INPUT_REPORT_PR_CHANGES_ONLY" = true ]; then
-            preselected_altered="${files_to_check// /|}"
-            apt-get install -y jq
-            jq '[.[] | select(.file | test("'"$preselected_altered"'"))]' compile_commands.json > compile_commands_selected.json
-            mv compile_commands_selected.json compile_commands.json
-        fi
-        if [ -z "$INPUT_EXCLUDE_DIR" ]; then
-            debug_print "Running cppcheck --project=compile_commands.json $INPUT_CPPCHECK_ARGS --output-file=cppcheck.txt ..."
-            eval cppcheck --project=compile_commands.json "$INPUT_CPPCHECK_ARGS" --output-file=cppcheck.txt "$GITHUB_WORKSPACE" || true
-        else
-            debug_print "Running cppcheck --project=compile_commands.json $INPUT_CPPCHECK_ARGS --output-file=cppcheck.txt -i$GITHUB_WORKSPACE/$INPUT_EXCLUDE_DIR ..."
-            eval cppcheck --project=compile_commands.json "$INPUT_CPPCHECK_ARGS" --output-file=cppcheck.txt -i"$GITHUB_WORKSPACE/$INPUT_EXCLUDE_DIR" "$GITHUB_WORKSPACE" || true
-        fi
-
-        # Excludes for clang-tidy are handled in python script
-        debug_print "Running run-clang-tidy-16 $INPUT_CLANG_TIDY_ARGS -p $(pwd) $files_to_check >>clang_tidy.txt 2>&1"
-        eval run-clang-tidy-16 "$INPUT_CLANG_TIDY_ARGS" -p "$(pwd)" "$files_to_check" >clang_tidy.txt 2>&1 || true
-
-    else
-        # Excludes for clang-tidy are handled in python script
-        debug_print "Running cppcheck $files_to_check $INPUT_CPPCHECK_ARGS --output-file=cppcheck.txt ..."
-        eval cppcheck "$files_to_check" "$INPUT_CPPCHECK_ARGS" --output-file=cppcheck.txt || true
-
-        debug_print "Running run-clang-tidy-16 $INPUT_CLANG_TIDY_ARGS $files_to_check >>clang_tidy.txt 2>&1"
-        eval run-clang-tidy-16 "$INPUT_CLANG_TIDY_ARGS" "$files_to_check" >clang_tidy.txt 2>&1 || true
-    fi
-
-# NOTE: clang-tidy cannot handle the esp-idf code (or I haven't figured out how
-#       to configure it for it...), so we're disabling it for now
-# echo "" > clang_tidy.txt
-# Excludes for clang-tidy are handled in python script
-# debug_print "Running clang-tidy-15 $INPUT_CLANG_TIDY_ARGS -p $(pwd) $files_to_check >>clang_tidy.txt 2>&1"
-# eval clang-tidy-15 "$INPUT_CLANG_TIDY_ARGS" -p "$(pwd)" "$files_to_check" >clang_tidy.txt 2>&1 || true
-
-    cd -
-
-    python3 /run_static_analysis.py -cc ./build/cppcheck.txt -ct ./build/clang_tidy.txt -o "$print_to_console" -fk "$use_extra_directory" --common "$common_ancestor" --head "origin/$GITHUB_HEAD_REF"
+if [ "${INPUT_LANGUAGE,,}" = "c++" ]; then
+    debug_print "Running checks on c++ code"
+    source "/src/entrypoint_cpp.sh"
+else # assume python
+    debug_print "Running checks on Python code"
+    source "/src/entrypoint_python.sh"
 fi
